@@ -1,0 +1,226 @@
+---
+title: "Analyse des tendances Youtube"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+date: "2023-01-03"
+---
+
+```{r setup, include=FALSE, message = FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE) 
+
+#install.packages(c("jsonlite", "purrr", "readr", "dplyr", "tidyr", "plyr", "tidyverse"))
+```
+
+```{r imports, echo=FALSE, message = FALSE}
+library(jsonlite)
+library(purrr)
+library(readr)
+library(dplyr)
+library(tidyr)
+library(plyr)
+library(tidyverse)
+library(lubridate)
+```
+
+```{r json, echo=FALSE, message = FALSE}
+# Récupération des catégories
+data = fromJSON("FR_category_id.json")
+items = data$items
+labels = items[4]$snippet$title
+
+#Une fonction permettant de récupérer le libéllé d'une catégorie en fonction en fonction de l'id categorie
+get_title <- function(id){
+  if (id %in% items[3]$id){
+    return(labels[items[3]==id])
+  }
+  else {
+    return("No Category")
+  } 
+}
+
+```
+
+```{r csvimport, echo=FALSE, message = FALSE}
+# Importataion du dataset
+dataset <- read_csv("FR_youtube_trending_data.csv")
+dataset$tags = strsplit(dataset$tags, '[|]')
+dsByViews = dataset[order(-dataset$view_count), ]
+```
+
+```{r image1, echo=FALSE, message = FALSE, fig.width = 8,fig.height = 5.5}
+count_category <- dataset %>% 
+  group_by(categoryId) %>% 
+  dplyr::summarise(n = n())
+count_category <- count_category %>% 
+  mutate(Category = unlist(lapply(count_category$categoryId,get_title)))
+
+ggplot(count_category, aes(x=reorder(Category,n), y=n, fill=Category)) +
+  geom_bar(stat="identity")+theme_minimal() + 
+  theme(axis.text.x = element_text(angle = 90))+ labs(x = "Category", y = "Number of video")
+ggsave("graph1.png")
+```
+
+```{r image2, echo=FALSE, message = FALSE, fig.width = 8,fig.height = 5.5}
+# Graphe des catégories des 10.000 vidéos avec le plus de vues 
+#dsByViews = dataset[order(-data$view_count), ]
+
+count_top_category <- head(dsByViews,10000) %>% 
+  group_by(categoryId) %>% 
+  dplyr::summarise(n = n())
+
+count_top_category <- count_top_category %>%
+  mutate(Category = unlist(lapply(count_top_category$categoryId,get_title)))
+
+ggplot(count_top_category, aes(x=reorder(Category,n), y=n, fill=Category)) +
+  geom_bar(stat="identity")+theme_minimal() + 
+  theme(axis.text.x = element_text(angle = 90))+ labs(x = "Category", y = "Number of video")
+```
+
+```{r filtreCat, echo=FALSE, message = FALSE}
+#Filtrer le dataset pour enlever les trailers (1) et clips musicaux (10)
+filtred = dsByViews[((dsByViews$categoryId!=10)&(dsByViews$categoryId!=1)),]
+#length(dsByViews$video_id)
+#ength(filtred$video_id)
+```
+
+```{r tags1, echo=FALSE, message = FALSE}
+#On split les tags
+tags = unlist(filtred$tags)
+df_tags_qyt <- as.data.frame(table(tags))
+videosWithoutTags = df_tags_qyt$Freq[df_tags_qyt$tags=="[None]"]
+differentsTags = length(df_tags_qyt[,1])
+```
+
+```{r tags2, echo=FALSE, message = FALSE}
+df_tagsbyfreq = df_tags_qyt[order(-df_tags_qyt$Freq), ]
+#On exclu le 1er car il s'agit des videos sans tag:
+df_best10tags = df_tagsbyfreq[(2:11),]
+```
+
+```{r tags3, echo=FALSE, message = FALSE}
+#On recupère les champs qui nous interessent
+tagsbydate = filtred[,c("publishedAt","tags")]
+#On classe les videos par mois années
+tagsbydate$publishedAt = format(as.Date(tagsbydate$publishedAt), "%Y-%m")
+#On enlève 2023 car pas assez de videos pour être représenatatif
+tagsbydate = tagsbydate[tagsbydate$publishedAt<2023,]
+#On unroll les différents tags de chaque video
+unrolltags = tagsbydate %>% unnest(c(tags, publishedAt))
+#On somme les tags par année
+sumtags = ddply(unrolltags, .(publishedAt, tags), summarize, qtytags=count(tags)$freq)
+```
+
+```{r tags4, echo=FALSE, message = FALSE}
+tagsCountAllTime = count(unrolltags$tags)
+#On récupère les 15 premiers tags (excepté le premier car c'est les sans tag pour plus de lisibilité)
+best10tags = df_best10tags$tags
+df_best_10_tags_by_year = sumtags[sumtags$tags %in% best10tags,]
+```
+
+```{r tags5, echo=FALSE, message = FALSE, fig.width = 7,fig.height = 3}
+ggplot(df_best_10_tags_by_year, aes(x=publishedAt, y=qtytags, color=tags)) + geom_line(aes(group=tags)) + ggtitle("Evolution du top 10 des tags utilisés") + xlab("Année") + ylab("Nombre de videos par tags") + labs(color = "Tags") + theme(axis.text.x = element_text(angle=45))+
+scale_colour_discrete("") + scale_linetype_manual("", values=c(1:11)) + scale_shape_manual("",
+values=c(1:11))
+```
+
+```{r tagsV1, echo=FALSE, message = FALSE}
+#On récupère les champs qui nous interessent
+tagsviewbydate = filtred[,c("publishedAt","tags","view_count")]
+#On classe les videos par années et mois
+tagsviewbydate$publishedAt = format(as.Date(tagsviewbydate$publishedAt), "%Y-%m")
+#tagsbydate$publishedAt = year(tagsbydate$publishedAt)
+#On enlève 2023 car pas assez de videos 
+tagsviewbydate = tagsviewbydate[tagsviewbydate$publishedAt<2023,]
+#On unroll les différents tags de chaque video
+unrolltagsviews <-  tagsviewbydate %>% unnest(c(tags, publishedAt))
+#On somme les vues des tags par années
+df_sumtagsviews = ddply(unrolltagsviews, .(publishedAt, tags), summarize, view_count=sum(view_count))
+
+```
+
+```{r tagsV2, echo=FALSE, message = FALSE}
+sumtagsviews = aggregate( cbind(view_count) ~  tags , data = unrolltagsviews , FUN = sum )
+best10tagsviews = arrange(sumtagsviews, -sumtagsviews$view_count)[2:11,]
+```
+
+```{r tagsV3, echo=FALSE, message = FALSE}
+#sumtagsview = sumtagsview[sumtagsview$tags=='[None]']
+#On récupère les 15 premiers tags (excepté le premier car c'est les sans tag pour plus de lisibilité)
+df_besttagsviews = df_sumtagsviews[df_sumtagsviews$tags %in% best10tagsviews$tags,]
+```
+
+```{r tagsV4, echo=FALSE, message = FALSE, fig.width = 7,fig.height = 3}
+
+ggplot(df_besttagsviews, aes(x=publishedAt, y=view_count, color=tags)) + geom_line(aes(group=tags))  + ggtitle("Evolution du top 10") + xlab("Année") + ylab("Vues des videos") + labs(color = "Tags") + theme(axis.text.x = element_text(angle=45))+
+scale_colour_discrete("") + scale_linetype_manual("", values=c(1:11)) + scale_shape_manual("",
+values=c(1:11))
+```
+
+```{r defmajuscules, echo=FALSE, message = FALSE}
+count_uppercase <- function(string) {
+  uppercase <- grep("[A-Z]", unlist(strsplit(string,"")))
+  return (length(uppercase))
+}
+most_uppercase <- function(string) {
+  return (count_uppercase(string) > (length(unlist(strsplit(string,"")))/2))
+}
+
+```
+
+```{r majuscules, echo=FALSE, message = FALSE}
+videoupperacse = unlist(lapply(filtred$title,most_uppercase))
+qtyvideouppercase = sum(videoupperacse, na.rm = TRUE)
+```
+
+```{r featurings, echo=FALSE, message = FALSE}
+titressplit = unlist(strsplit(filtred$title, '[- (),.]'))
+titressplit = tolower(titressplit)
+titlewords = table(titressplit)
+featuringcount = titlewords["feat"]+titlewords["ft"]+titlewords["featuring"]+titlewords["avec"]
+```
+
+```{r heuredepost, echo=FALSE, message = FALSE, fig.width = 3.5,fig.height = 3.5}
+# Graphe du nombre de post de vidéos par tranche horaire 
+data_hours <- filtred %>%
+  mutate(hours = hour(ymd_hms(publishedAt))) %>%
+  group_by(hours = hours) %>%
+  dplyr::summarize(count = n()) %>%
+  mutate(interval = seq(0,23))
+
+ggplot(data_hours, aes(x = hours, y = count, fill = -count)) +
+geom_bar(stat = "identity") +coord_polar()+theme(legend.position = "none")+
+scale_fill_gradient(low = "#FF0000", high = "#282828") + labs(x = "Hours", y = "Number of video")
+```
+
+```{r compraisonpays, echo=FALSE, message = FALSE}
+country_list <- c("FR","US","RU")
+for (i in 1:length(country_list)) {
+    file_path <- file.path(".", paste(country_list[i],"_youtube_trending_data.csv",sep=""))
+    this_data <- read.csv(file_path)
+    
+    counts_country <- this_data %>%
+        group_by(categoryId) %>% 
+        dplyr::summarise(sum_view_count = sum(view_count))
+    counts_country <- counts_country %>%
+        mutate(Category = unlist(lapply(counts_country$categoryId,get_title))) %>%
+        mutate(Country = country_list[i])
+    
+    total_country = sum(counts_country$sum_view_count)
+    
+    counts_country <- counts_country %>%
+        mutate(n_norma = sum_view_count/total_country*100)
+    
+    if (i==1) {combined_data <- counts_country}
+    else {combined_data <- rbind(combined_data, counts_country)}
+} 
+```
+
+```{r compraisonpaysgraph, echo=FALSE, message = FALSE, fig.width = 7,fig.height = 4}
+
+ggplot(combined_data, aes(x = reorder(Category,n_norma), y = n_norma, fill = Country)) +
+  geom_col(position = "dodge") +
+  labs(x = "Category", y = "% of Views", fill = "Country") + 
+  theme(axis.text.x = element_text(angle = 90))
+```
